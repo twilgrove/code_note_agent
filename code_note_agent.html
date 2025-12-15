@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Code Agent (v0.7.3 Multi-Key & Resume)</title>
+    <title>AI Code Agent (v0.8.1 File Count)</title>
     <style>
         :root {
             --primary: #4f46e5;
@@ -167,6 +167,21 @@
             box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
         }
 
+        /* Checkbox 样式优化 */
+        .checkbox-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 5px;
+            font-size: 0.9rem;
+            color: var(--text);
+            cursor: pointer;
+        }
+        .checkbox-wrapper input {
+            width: auto;
+            margin: 0;
+        }
+
         /* 按钮系统 */
         .btn-group {
             display: flex;
@@ -261,6 +276,31 @@
             margin-top: 8px;
         }
 
+        /* 文件列表区域 */
+        .file-list-box {
+            margin-top: 15px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            max-height: 250px;
+            overflow-y: auto;
+            background: #fff;
+            padding: 8px;
+            display: none;
+        }
+        .file-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border-bottom: 1px solid #f1f5f9;
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+        .file-item:last-child { border-bottom: none; }
+        .file-item:hover { background-color: #f8fafc; }
+        .file-item input[type="checkbox"] { width: auto; margin: 0; cursor: pointer; }
+        .file-item span { cursor: pointer; word-break: break-all; }
+
         /* 日志与进度 */
         .console {
             background: #1e293b;
@@ -352,7 +392,7 @@
 <body>
 
     <div class="header">
-        <h1>🤖 Code Agent <span class="version">v0.7.3</span></h1>
+        <h1>🤖 Code Agent <span class="version">v0.8.1</span></h1>
         <div id="envBadge" class="badge badge-err">
             <span>Checking Env...</span>
         </div>
@@ -398,17 +438,24 @@
                 </div>
             </div>
 
+            <div class="full-width" id="customConfigArea" style="display:none;">
+                <label class="checkbox-wrapper">
+                    <input type="checkbox" id="customUseManual" onchange="handleProviderChange()">
+                    ☑️ 手动输入模型/接入点 ID (跳过列表获取)
+                </label>
+            </div>
+
             <div class="full-width" id="modelSelectionArea" style="display:none; animation: fadeIn 0.5s;">
-                <label>选择模型 (Model)</label>
+                <label>选择模型 (Model) - <span style="font-weight:400; font-size:0.8em; color:var(--primary)">点击切换模型将自动验证</span></label>
                 <select id="modelSelect" onchange="handleModelSelect()">
                 </select>
                 <input type="text" id="manualModel" placeholder="请输入模型名称" style="display:none; margin-top:8px;">
             </div>
 
-            <div class="full-width" id="doubaoEndpointArea" style="display:none; animation: fadeIn 0.5s;">
-                <label>接入点 ID (Endpoint ID)</label>
-                <input type="text" id="doubaoEndpoint" placeholder="ep-202406xx-xxxxx" oninput="resetConnect()">
-                <div style="font-size:0.75rem; color:var(--gray); margin-top:4px;">
+            <div class="full-width" id="endpointInputArea" style="display:none; animation: fadeIn 0.5s;">
+                <label id="endpointLabel">接入点 ID (Endpoint ID)</label>
+                <input type="text" id="manualEndpoint" placeholder="ep-202406xx-xxxxx" oninput="resetConnect()">
+                <div id="endpointHint" style="font-size:0.75rem; color:var(--gray); margin-top:4px;">
                     💡 前往火山引擎控制台创建接入点，复制 ep-xxxx ID 填入此处。
                 </div>
             </div>
@@ -436,6 +483,12 @@
             <div>📥 输入: <span id="inLabel" class="path-tag">未选择</span></div>
             <div>📤 输出: <span id="outLabel" class="path-tag">未选择</span></div>
         </div>
+
+        <div id="fileListArea" class="file-list-box">
+            <div style="padding:10px; text-align:center; color:var(--gray)">请先选择输入文件夹...</div>
+        </div>
+        <div id="fileSummary" style="font-size:0.8rem; color:var(--gray); margin-top:5px; display:none; text-align:right">
+            </div>
     </div>
 
     <div class="card step-locked" id="step3">
@@ -451,9 +504,10 @@
         <div class="progress-container" id="progressBox">
             <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:5px;">
                 <div>
-                    <span id="progressText">0%</span>
-                    <span id="runTimer"
-                        style="margin-left:10px; color:var(--primary); font-weight:600; display:none">0.0s</span>
+                    <span id="progressText" style="font-weight:600">0%</span>
+                    <span id="progressCount" style="color:var(--gray); font-size:0.9em; margin-left:8px;">(0/0)</span>
+                    
+                    <span id="runTimer" style="margin-left:10px; color:var(--primary); font-weight:600; display:none">0.0s</span>
                 </div>
                 <span id="fileStatus" style="color:var(--gray)">等待开始...</span>
             </div>
@@ -491,6 +545,8 @@
             inHandle: null,
             outHandle: null,
             totalFiles: 0,
+            fileList: [], 
+            filesToCopy: new Set(), 
             processed: 0,
             timer: null
         };
@@ -513,16 +569,31 @@
             document.getElementById('baseUrl').value = config.baseUrl;
             document.getElementById('baseUrlPreview').textContent = config.baseUrl;
 
-            // 修改 2: 读取该服务商对应的缓存 Key，如果没有则置空
             const cachedKey = localStorage.getItem('aca_key_' + pKey);
             document.getElementById('apiKey').value = cachedKey || '';
 
-            if (pKey === 'doubao') {
+            document.getElementById('customConfigArea').style.display = (pKey === 'custom') ? 'block' : 'none';
+            
+            const isCustomManual = (pKey === 'custom' && document.getElementById('customUseManual').checked);
+            const isManualMode = (pKey === 'doubao') || isCustomManual;
+
+            if (isManualMode) {
                 document.getElementById('modelSelectionArea').style.display = 'none';
-                document.getElementById('doubaoEndpointArea').style.display = 'block';
+                document.getElementById('endpointInputArea').style.display = 'block';
+                
+                const cachedEp = localStorage.getItem('aca_manual_ep_' + pKey);
+                document.getElementById('manualEndpoint').value = cachedEp || '';
+
+                if(pKey === 'doubao') {
+                    document.getElementById('endpointLabel').innerText = "接入点 ID (Endpoint ID)";
+                    document.getElementById('endpointHint').style.display = 'block';
+                } else {
+                    document.getElementById('endpointLabel').innerText = "模型 ID / 部署 ID";
+                    document.getElementById('endpointHint').style.display = 'none';
+                }
             } else {
                 document.getElementById('modelSelectionArea').style.display = 'none';
-                document.getElementById('doubaoEndpointArea').style.display = 'none';
+                document.getElementById('endpointInputArea').style.display = 'none';
             }
             resetConnect();
         }
@@ -538,19 +609,70 @@
             btn.textContent = "⚡ 连接并验证";
             btn.className = "btn-primary";
 
-            if (document.getElementById('providerSelect').value !== 'doubao') {
+            const pKey = document.getElementById('providerSelect').value;
+            const isCustomManual = (pKey === 'custom' && document.getElementById('customUseManual').checked);
+            if (pKey !== 'doubao' && !isCustomManual) {
                 document.getElementById('modelSelectionArea').style.display = "none";
             }
             lockStep(2);
             lockStep(3);
         }
 
-        function handleModelSelect() {
+        async function handleModelSelect() {
             const val = document.getElementById('modelSelect').value;
-            document.getElementById('manualModel').style.display = (val === 'CUSTOM_MANUAL') ? 'block' : 'none';
+            const isManual = (val === 'CUSTOM_MANUAL');
+            document.getElementById('manualModel').style.display = isManual ? 'block' : 'none';
+
+            if (isManual || !val) return;
+
+            const btn = document.getElementById('btnConnect');
+            const pKey = document.getElementById('providerSelect').value;
+            const config = PROVIDERS[pKey];
+            const key = document.getElementById('apiKey').value.trim();
+            const baseUrl = document.getElementById('baseUrl').value.replace(/\/$/, '');
+
+            btn.disabled = true;
+            btn.textContent = `⌛ 验证模型 [${val}]...`;
+            btn.className = "btn-primary";
+
+            try {
+                let url, body, headers = { 'Content-Type': 'application/json' };
+                
+                if (config.type === 'gemini') {
+                    url = `${baseUrl}/models/${val}:generateContent?key=${key}`;
+                    body = { contents: [{ parts: [{ text: "hi" }] }] };
+                } else {
+                    url = `${baseUrl}/chat/completions`;
+                    if (key) headers['Authorization'] = `Bearer ${key}`;
+                    body = {
+                        model: val,
+                        messages: [{ role: "user", content: "hi" }],
+                        max_tokens: 1
+                    };
+                }
+
+                const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+                if (!res.ok) {
+                    const txt = await res.text();
+                    throw new Error(`HTTP ${res.status}: ${txt.slice(0, 30)}`);
+                }
+
+                log(`✅ 模型 [${val}] 连接成功`, 'ok');
+                btn.textContent = `✅ 已连接: ${val}`;
+                btn.className = "btn-primary";
+                
+                STATE.model = val;
+                saveConfig();
+
+            } catch (e) {
+                log(`❌ 模型 [${val}] 连接失败: ${e.message}`, 'err');
+                btn.textContent = `❌ ${val} 失败`;
+                btn.className = "btn-error";
+            } finally {
+                btn.disabled = false;
+            }
         }
 
-        // --- 核心：连接与验证 ---
         async function connectAndFetchModels() {
             const btn = document.getElementById('btnConnect');
             const pKey = document.getElementById('providerSelect').value;
@@ -565,17 +687,18 @@
             btn.textContent = "⌛ 连接中...";
             log(`正在连接 ${config.name}...`, 'sys');
 
-            // === 1. 豆包特殊逻辑 ===
-            if (pKey === 'doubao') {
-                const ep = document.getElementById('doubaoEndpoint').value.trim();
+            const isCustomManual = (pKey === 'custom' && document.getElementById('customUseManual').checked);
+            
+            if (pKey === 'doubao' || isCustomManual) {
+                const ep = document.getElementById('manualEndpoint').value.trim();
                 if (!ep) {
                     btn.disabled = false;
                     btn.textContent = "❌ 缺少 ID";
-                    return alert("请输入豆包 Endpoint ID");
+                    return alert("请输入接入点 ID / 模型 ID");
                 }
 
                 try {
-                    log(`验证接入点: ${ep}...`, 'sys');
+                    log(`验证 ID: ${ep}...`, 'sys');
                     const res = await fetch(`${baseUrl}/chat/completions`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
@@ -583,10 +706,16 @@
                     });
 
                     if (res.status === 401) throw new Error("Key 无效 (401)");
-                    if (res.status === 404) throw new Error("Endpoint ID 不存在 (404)");
+                    if (res.status === 404) throw new Error("ID 不存在 (404)");
                     if (!res.ok) {
                         const txt = await res.text();
                         throw new Error(`HTTP ${res.status}: ${txt.slice(0, 50)}`);
+                    }
+
+                    const data = await res.json();
+                    let connectedName = ep;
+                    if(data.model && data.model !== ep) {
+                        connectedName = `${ep} (${data.model})`;
                     }
 
                     STATE.model = ep;
@@ -596,10 +725,10 @@
                     saveConfig();
 
                     log(`✅ 验证通过！`, 'ok');
-                    btn.textContent = "✅ 已连接";
+                    btn.textContent = `✅ 已连接: ${connectedName}`;
                     btn.className = "btn-primary";
                     unlockStep(2);
-                    checkStep3(); // 修改 3: 连接成功后，如果已挂载文件，尝试解锁 Start 按钮
+                    checkStep3(); 
 
                 } catch (e) {
                     log(`❌ 连接失败: ${e.message}`, 'err');
@@ -610,7 +739,6 @@
                 return;
             }
 
-            // === 2. 其他模型 ===
             let models = [];
             let fetchSuccess = false;
 
@@ -660,33 +788,92 @@
                 select.appendChild(new Option("✏️ 手动输入...", "CUSTOM_MANUAL"));
                 select.value = models[0];
             }
-            handleModelSelect();
-
+            
             STATE.baseUrl = baseUrl;
             STATE.key = key;
             STATE.provider = pKey;
             saveConfig();
 
             document.getElementById('modelSelectionArea').style.display = "block";
-            btn.textContent = "✅ 已连接";
-            btn.className = "btn-primary";
-            btn.disabled = false;
+            
+            select.value = models[0];
+            await handleModelSelect(); 
+
             unlockStep(2);
-            checkStep3(); // 修改 3: 连接成功后，如果已挂载文件，尝试解锁 Start 按钮
+            checkStep3(); 
         }
 
-        // --- 文件扫描与处理 ---
         async function selectIn() {
             try {
                 STATE.inHandle = await window.showDirectoryPicker({ mode: 'read' });
                 document.getElementById('inLabel').textContent = STATE.inHandle.name;
                 document.getElementById('pathDisplay').style.display = 'block';
-                log(`扫描目录: ${STATE.inHandle.name}...`, 'sys');
-                STATE.totalFiles = await scanDir(STATE.inHandle);
+                
+                log(`正在扫描目录: ${STATE.inHandle.name}...`, 'sys');
+                
+                STATE.fileList = await buildFileList(STATE.inHandle);
+                STATE.totalFiles = STATE.fileList.length;
+                
+                renderFileList();
+                
                 log(`共发现 ${STATE.totalFiles} 个文件`, 'ok');
                 checkStep3();
-            } catch (e) { }
+            } catch (e) { 
+                console.error(e);
+            }
         }
+
+        async function buildFileList(dirHandle, path = "") {
+            let files = [];
+            for await (const entry of dirHandle.values()) {
+                const relPath = path ? `${path}/${entry.name}` : entry.name;
+                if (entry.kind === 'file') {
+                    if (shouldProcess(entry.name)) {
+                        files.push(relPath);
+                    }
+                } else if (entry.kind === 'directory' && !CONFIG.ignoreDirs.includes(entry.name)) {
+                    files = files.concat(await buildFileList(entry, relPath));
+                }
+            }
+            return files;
+        }
+
+        function renderFileList() {
+            const listArea = document.getElementById('fileListArea');
+            listArea.innerHTML = ""; 
+            
+            if (STATE.fileList.length === 0) {
+                listArea.innerHTML = '<div style="padding:10px; text-align:center; color:var(--gray)">没有找到符合条件的代码文件</div>';
+                return;
+            }
+
+            STATE.fileList.forEach((path, idx) => {
+                const div = document.createElement('div');
+                div.className = 'file-item';
+                div.innerHTML = `
+                    <input type="checkbox" id="f_${idx}" checked data-path="${path}">
+                    <label for="f_${idx}" style="font-weight:400; font-size:0.85rem; margin:0; cursor:pointer">${path}</label>
+                `;
+                listArea.appendChild(div);
+            });
+            
+            listArea.style.display = 'block';
+            updateSummary();
+            
+            listArea.querySelectorAll('input').forEach(chk => {
+                chk.addEventListener('change', updateSummary);
+            });
+        }
+
+        function updateSummary() {
+            const total = STATE.fileList.length;
+            const checked = document.querySelectorAll('#fileListArea input:checked').length;
+            const unchecked = total - checked;
+            const sumEl = document.getElementById('fileSummary');
+            sumEl.style.display = 'block';
+            sumEl.innerHTML = `共 ${total} 个 | <span style="color:var(--primary)">🤖 AI处理: ${checked}</span> | <span style="color:var(--gray)">📄 原样复制: ${unchecked}</span>`;
+        }
+
         async function selectOut() {
             try {
                 STATE.outHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
@@ -711,14 +898,25 @@
         async function startTask() {
             if (STATE.totalFiles === 0) return alert("目录为空");
 
-            if (STATE.provider === 'doubao') {
-                STATE.model = document.getElementById('doubaoEndpoint').value.trim();
+            const pKey = STATE.provider;
+            const isCustomManual = (pKey === 'custom' && document.getElementById('customUseManual').checked);
+
+            if (pKey === 'doubao' || isCustomManual) {
+                STATE.model = document.getElementById('manualEndpoint').value.trim();
             } else {
                 const sv = document.getElementById('modelSelect').value;
                 STATE.model = (sv === 'CUSTOM_MANUAL') ? document.getElementById('manualModel').value.trim() : sv;
             }
 
             if (!STATE.model) return alert("请指定模型/接入点");
+
+            STATE.filesToCopy.clear();
+            const checkboxes = document.querySelectorAll('#fileListArea input[type="checkbox"]');
+            checkboxes.forEach(chk => {
+                if (!chk.checked) {
+                    STATE.filesToCopy.add(chk.getAttribute('data-path'));
+                }
+            });
 
             const btn = document.getElementById('btnStart');
             btn.disabled = true;
@@ -765,28 +963,36 @@
         async function processRecursive(inDir, outDir, prefix) {
             for await (const entry of inDir.values()) {
                 const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+                
                 if (entry.kind === 'file') {
                     if (!shouldProcess(entry.name)) continue;
-                    updateUI(null, `处理: ${relPath}`);
+                    
+                    const isCopyOnly = STATE.filesToCopy.has(relPath);
+                    const actionName = isCopyOnly ? "复制" : "AI处理";
+                    
+                    updateUI(null, `${actionName}: ${relPath}`);
 
                     const file = await entry.getFile();
                     const text = await file.text();
                     let content = text;
 
-                    if (isCode(entry.name)) {
+                    if (!isCopyOnly && isCode(entry.name)) {
                         try {
                             content = await callAI(text, entry.name, relPath);
-                            log(`[OK] ${relPath}`, 'ok');
+                            log(`[AI OK] ${relPath}`, 'ok');
                         } catch (e) {
-                            log(`[SKIP] ${relPath}: ${e.message}`, 'err');
+                            log(`[AI FAIL] ${relPath}: ${e.message} (已保留原文件)`, 'err');
                         }
                     }
+
                     const newFile = await outDir.getFileHandle(entry.name, { create: true });
                     const w = await newFile.createWritable();
                     await w.write(content);
                     await w.close();
+                    
                     STATE.processed++;
                     updateUI();
+
                 } else if (entry.kind === 'directory' && !CONFIG.ignoreDirs.includes(entry.name)) {
                     const newSub = await outDir.getDirectoryHandle(entry.name, { create: true });
                     await processRecursive(entry, newSub, relPath);
@@ -867,6 +1073,10 @@
             }
             document.getElementById('progressFill').style.width = `${p}%`;
             document.getElementById('progressText').textContent = `${p}%`;
+            
+            // 关键修改：更新文件计数
+            document.getElementById('progressCount').textContent = `(${STATE.processed}/${STATE.totalFiles})`;
+            
             if (status) document.getElementById('fileStatus').textContent = status;
         }
 
@@ -879,16 +1089,21 @@
         }
 
         function saveConfig() {
-            // 修改 2: 将 Key 单独存储到 aca_key_服务商
             localStorage.setItem('aca_provider', STATE.provider);
             localStorage.setItem('aca_key_' + STATE.provider, STATE.key);
             localStorage.setItem('aca_baseurl', STATE.baseUrl);
-            if (STATE.provider === 'doubao') localStorage.setItem('aca_doubao_ep', STATE.model);
+            
+            const pKey = STATE.provider;
+            const isCustomManual = (pKey === 'custom' && document.getElementById('customUseManual').checked);
+            
+            if (pKey === 'doubao' || isCustomManual) {
+                const epVal = document.getElementById('manualEndpoint').value.trim();
+                if(epVal) localStorage.setItem('aca_manual_ep_' + pKey, epVal);
+            }
         }
 
         function loadConfig() {
             const p = localStorage.getItem('aca_provider');
-            // 初始化时，先加载 provider，然后触发 handleProviderChange 来加载对应的 key
             if (p && PROVIDERS[p]) {
                 document.getElementById('providerSelect').value = p;
                 handleProviderChange();
@@ -898,9 +1113,6 @@
 
             const u = localStorage.getItem('aca_baseurl');
             if (u) { document.getElementById('baseUrl').value = u; document.getElementById('baseUrlPreview').textContent = u; }
-
-            const ep = localStorage.getItem('aca_doubao_ep');
-            if (ep) document.getElementById('doubaoEndpoint').value = ep;
         }
 
         function resetApp() { localStorage.clear(); location.reload(); }
