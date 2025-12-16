@@ -1,7 +1,7 @@
 
 -----
 
-# 🤖 Code Note Agent (v0.7.3)
+# 🤖 Code Note Agent (v0.8.1)
 
 > **声明 / Credits**
 >
